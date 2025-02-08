@@ -14,7 +14,7 @@ import { ChatMarkdownRender } from '../markdown/ChatMarkdownRender.js';
 import { URI } from '../../../../../../../base/common/uri.js';
 import { IDisposable } from '../../../../../../../base/common/lifecycle.js';
 import { ErrorDisplay } from './ErrorDisplay.js';
-import { TextAreaFns, VoidInputBox2 } from '../util/inputs.js';
+import { TextAreaFns, VoidInputBox2, parseAndRenderContent } from '../util/inputs.js';
 import { ModelDropdown, } from '../void-settings-tsx/ModelDropdown.js';
 import { SidebarThreadSelector } from './SidebarThreadSelector.js';
 import { useScrollbarStyles } from '../util/useScrollbarStyles.js';
@@ -536,7 +536,6 @@ export const SelectedFiles = (
 
 type ChatBubbleMode = 'display' | 'edit'
 const ChatBubble = ({ chatMessage, isLoading }: { chatMessage: ChatMessage, isLoading?: boolean, }) => {
-
 	const role = chatMessage.role
 
 	// edit mode state
@@ -554,7 +553,7 @@ const ChatBubble = ({ chatMessage, isLoading }: { chatMessage: ChatMessage, isLo
 		if (mode === 'display') {
 			chatbubbleContents = <>
 				<SelectedFiles type='past' selections={chatMessage.selections || []} />
-				{chatMessage.displayContent}
+				{parseAndRenderContent(chatMessage.displayContent || '')}
 			</>
 		}
 		else if (mode === 'edit') {

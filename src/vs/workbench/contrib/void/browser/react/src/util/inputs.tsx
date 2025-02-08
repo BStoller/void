@@ -50,7 +50,7 @@ export const WidgetComponent = <CtorParams extends any[], Instance>({ ctor, prop
 }
 
 
-export type TextAreaFns = { setValue: (v: string) => void, enable: () => void, disable: () => void }
+export type TextAreaFns = { setValue: (v: string) => void, enable: () => void, disable: () => void, value: string }
 type InputBox2Props = {
 	initValue?: string | null;
 	placeholder: string;
@@ -66,6 +66,7 @@ export const VoidInputBox2 = forwardRef<HTMLDivElement, InputBox2Props>(function
 	const [showFileMenu, setShowFileMenu] = useState(false)
 	const [searchText, setSearchText] = useState('')
 	const contentRef = useRef<HTMLDivElement | null>(null)
+	const [currentValue, setCurrentValue] = useState(initValue || '')
 
 	const adjustHeight = useCallback(() => {
 		const r = contentRef.current
@@ -83,12 +84,14 @@ export const VoidInputBox2 = forwardRef<HTMLDivElement, InputBox2Props>(function
 			const r = contentRef.current
 			if (!r) return
 			r.textContent = val
-			onChangeText?.(r.textContent || '')
+			setCurrentValue(val)
+			onChangeText?.(val)
 			adjustHeight()
 		},
 		enable: () => { setEnabled(true) },
 		disable: () => { setEnabled(false) },
-	}), [onChangeText, adjustHeight])
+		value: currentValue
+	}), [onChangeText, adjustHeight, currentValue])
 
 	useEffect(() => {
 		if (initValue)
@@ -142,16 +145,7 @@ export const VoidInputBox2 = forwardRef<HTMLDivElement, InputBox2Props>(function
 			e.stopPropagation();
 
 			// Get the content before sending
-			const content = Array.from(r.childNodes).map(node => {
-				if (node.nodeType === Node.TEXT_NODE) {
-					return node.textContent || '';
-				} else if (node instanceof Element && node.classList.contains('file-reference')) {
-					const fileNameSpan = node.querySelector('.ml-1');
-					return '@' + (fileNameSpan?.textContent || '');
-				}
-				return '';
-			}).join('');
-
+			const content = getSerializedContent(r);
 			console.log('handleKeyDown - Content to send:', content);
 
 			// Only send if there's actual content
@@ -171,7 +165,9 @@ export const VoidInputBox2 = forwardRef<HTMLDivElement, InputBox2Props>(function
 		const r = contentRef.current
 		if (!r) return
 
-		onChangeText?.(getSerializedContent(r))
+		const newValue = getSerializedContent(r)
+		setCurrentValue(newValue)
+		onChangeText?.(newValue)
 		adjustHeight()
 
 		// Handle @ menu search
@@ -210,83 +206,91 @@ export const VoidInputBox2 = forwardRef<HTMLDivElement, InputBox2Props>(function
 	const accessor = useAccessor();
 	const chatThreadService = accessor.get('IChatThreadService');
 
-	const handleFileSelect = useCallback((selection: StagingSelectionItem) => {
-		console.log('File selected:', selection);
+	const handleFileSelect = useCallback((selectionItem: StagingSelectionItem) => {
+		console.log('File selected:', selectionItem);
 		const r = contentRef.current
 		if (!r) return
 
-		const sel = window.getSelection()
-		if (!sel) return
+		const fileName = basename(selectionItem.fileURI);
 
-		const range = sel.getRangeAt(0)
-		const textBeforeCursor = r.textContent?.substring(0, range.startOffset) || ''
-		const textAfterCursor = r.textContent?.substring(range.startOffset) || ''
-		const lastAtPos = textBeforeCursor.lastIndexOf('@')
+		// Get the current selection
+		const domSelection = window.getSelection();
+		if (!domSelection || !domSelection.rangeCount) return;
 
-		console.log('Text before cursor:', textBeforeCursor);
-		console.log('Text after cursor:', textAfterCursor);
-		console.log('Last @ position:', lastAtPos);
+		const range = domSelection.getRangeAt(0);
+		const container = range.startContainer;
 
-		if (lastAtPos !== -1) {
-			const fileName = basename(selection.fileURI);
-			console.log('Creating file reference for:', fileName);
+		if (container.nodeType === Node.TEXT_NODE) {
+			const text = container.textContent || '';
+			const cursorOffset = range.startOffset;
 
-			// Create the file reference element
-			const fileRefSpan = document.createElement('span');
-			fileRefSpan.className = 'file-reference inline-flex items-center bg-void-bg-2 rounded px-1.5 py-0.5 text-void-fg-1 text-sm';
+			// Find and delete the @ and search text
+			const textBeforeCursor = text.substring(0, cursorOffset);
+			const lastAtPos = textBeforeCursor.lastIndexOf('@');
 
-			const atSpan = document.createElement('span');
-			atSpan.className = 'text-void-fg-3';
-			atSpan.textContent = '@';
+			if (lastAtPos !== -1) {
+				const deleteRange = document.createRange();
+				deleteRange.setStart(container, lastAtPos);
+				deleteRange.setEnd(container, cursorOffset);
+				deleteRange.deleteContents();
 
-			const nameSpan = document.createElement('span');
-			nameSpan.className = 'ml-1';
-			nameSpan.textContent = fileName;
-
-			fileRefSpan.appendChild(atSpan);
-			fileRefSpan.appendChild(nameSpan);
-
-			// Create a new range for the replacement
-			const newRange = document.createRange();
-			newRange.setStart(r.firstChild || r, lastAtPos);
-			newRange.setEnd(range.startContainer, range.startOffset);
-
-			// Delete the @ symbol and any text after it up to cursor
-			newRange.deleteContents();
-
-			// Insert the file reference
-			newRange.insertNode(fileRefSpan);
-
-			// Add a space after the file reference
-			const spaceNode = document.createTextNode(' ');
-			fileRefSpan.after(spaceNode);
-
-			// Add back the text that was after the cursor
-			if (textAfterCursor) {
-				const afterTextNode = document.createTextNode(textAfterCursor);
-				spaceNode.after(afterTextNode);
+				// Set insertion point to where the @ was
+				range.setStart(container, lastAtPos);
+				range.setEnd(container, lastAtPos);
 			}
-
-			// Set cursor position after the space
-			const selRange = document.createRange();
-			selRange.setStartAfter(spaceNode);
-			selRange.collapse(true);
-			sel.removeAllRanges();
-			sel.addRange(selRange);
-
-			// Trigger content update
-			const content = getSerializedContent(r);
-			console.log('Updated content after file reference:', content);
-			onChangeText?.(content);
-			adjustHeight();
 		}
+
+		// Insert the file reference
+		const fileRefElement = createFileReferenceElement(fileName);
+		range.insertNode(fileRefElement);
+
+		// Add a space after the file reference
+		const space = document.createTextNode(' ');
+		fileRefElement.after(space);
+
+		// Move cursor after the space
+		const newRange = document.createRange();
+		newRange.setStartAfter(space);
+		newRange.collapse(true);
+		domSelection.removeAllRanges();
+		domSelection.addRange(newRange);
+
+		// Trigger content update
+		const content = getSerializedContent(r);
+		console.log('Updated content after file reference:', content);
+		setCurrentValue(content);
+		onChangeText?.(content);
+		adjustHeight();
 
 		// Add the file to staging selections
 		const currentStaging = chatThreadService.state.currentStagingSelections ?? [];
-		chatThreadService.setStaging([...currentStaging, selection]);
+		chatThreadService.setStaging([...currentStaging, selectionItem]);
 
 		setShowFileMenu(false);
-	}, [onChangeText, adjustHeight, chatThreadService, getSerializedContent]);
+	}, [onChangeText, adjustHeight, chatThreadService]);
+
+	// Initialize content with file references if there's an initial value
+	useEffect(() => {
+		if (!initValue || !contentRef.current) return;
+
+		// Clear existing content
+		contentRef.current.innerHTML = '';
+
+		// Parse and insert content with file references
+		const parts = initValue.split(/(@[^\s]+)/);
+		parts.forEach(part => {
+			if (part.startsWith('@')) {
+				const fileName = part.substring(1);
+				const fileRefElement = createFileReferenceElement(fileName);
+				contentRef.current?.appendChild(fileRefElement);
+				contentRef.current?.appendChild(document.createTextNode(' '));
+			} else if (part) {
+				contentRef.current?.appendChild(document.createTextNode(part));
+			}
+		});
+
+		adjustHeight();
+	}, [initValue, adjustHeight]);
 
 	// Add placeholder handling
 	useEffect(() => {
@@ -1077,23 +1081,94 @@ export const VoidButton = ({ children, disabled, onClick }: { children: React.Re
 
 const FileReference = ({ fileName }: { fileName: string }) => {
 	return (
-		<span className="inline-flex items-center bg-void-bg-2 rounded px-1.5 py-0.5 text-void-fg-1 text-sm">
+		<span className="file-reference inline-flex items-center bg-void-bg-2 rounded px-1.5 py-0.5 text-void-fg-1 text-sm">
 			<span className="text-void-fg-3">@</span>
 			<span className="ml-1">{fileName}</span>
 		</span>
 	);
 };
 
+// Add this new function to parse and render content with file references
+export const parseAndRenderContent = (content: string): React.ReactNode[] => {
+	if (!content) return [];
 
-// 						containerRef.current.removeChild(containerRef.current.firstChild);
-// 					}
-// 				}
-// 				checkboxRef.current = null;
-// 			}
-// 		};
-// 	}, [checkboxRef, label, initVal, onChangeChecked]);
+	const parts = content.split(/(@[^\s]+)/);
+	return parts.map((part, index) => {
+		if (part.startsWith('@')) {
+			// Pass the filename without the @ symbol since FileReference adds it
+			const fileName = part.substring(1);
+			return <FileReference key={index} fileName={fileName} />;
+		}
+		return part;
+	});
+};
 
-// 	return <div ref={containerRef} className="w-full" />;
-// };
+// Helper function to create a file reference DOM element
+const createFileReferenceElement = (fileName: string): HTMLSpanElement => {
+	const span = document.createElement('span');
+	span.className = 'file-reference inline-flex items-center bg-void-bg-2 rounded px-1.5 py-0.5 text-void-fg-1 text-sm';
+
+	const atSpan = document.createElement('span');
+	atSpan.className = 'text-void-fg-3';
+	atSpan.textContent = '@';
+
+	const nameSpan = document.createElement('span');
+	nameSpan.className = 'ml-1';
+	nameSpan.textContent = fileName;
+
+	span.appendChild(atSpan);
+	span.appendChild(nameSpan);
+	return span;
+};
+
+// Helper function to insert file reference at cursor
+const insertFileReferenceAtCursor = (fileName: string) => {
+	const selection = window.getSelection();
+	if (!selection || !selection.rangeCount) return;
+
+	const range = selection.getRangeAt(0);
+	const container = range.startContainer;
+
+	if (container.nodeType === Node.TEXT_NODE) {
+		const text = container.textContent || '';
+		const cursorOffset = range.startOffset;
+
+		// Look backwards for @ symbol and delete everything from @ to cursor
+		let atSymbolPos = -1;
+		for (let i = cursorOffset - 1; i >= 0; i--) {
+			if (text[i] === '@') {
+				atSymbolPos = i;
+				break;
+			}
+		}
+
+		if (atSymbolPos !== -1) {
+			// Delete everything from @ to cursor
+			const deleteRange = document.createRange();
+			deleteRange.setStart(container, atSymbolPos);
+			deleteRange.setEnd(container, cursorOffset);
+			deleteRange.deleteContents();
+
+			// Set insertion point to where the @ was
+			range.setStart(container, atSymbolPos);
+			range.setEnd(container, atSymbolPos);
+		}
+	}
+
+	// Insert the file reference
+	const fileRefElement = createFileReferenceElement(fileName);
+	range.insertNode(fileRefElement);
+
+	// Add a space after the file reference
+	const space = document.createTextNode(' ');
+	fileRefElement.after(space);
+
+	// Move cursor after the space
+	const newRange = document.createRange();
+	newRange.setStartAfter(space);
+	newRange.collapse(true);
+	selection.removeAllRanges();
+	selection.addRange(newRange);
+};
 
 

@@ -101,18 +101,12 @@ const AddModelMenu = ({ onSubmit }: { onSubmit: () => void }) => {
 
 	const settingsState = useSettingsState()
 
-	// const providerNameRef = useRef<ProviderName | null>(null)
 	const [providerName, setProviderName] = useState<ProviderName | null>(null)
-
-	const modelNameRef = useRef<HTMLTextAreaElement | null>(null)
-
+	const [modelName, setModelName] = useState('')
 	const [errorString, setErrorString] = useState('')
-
 
 	return <>
 		<div className='flex items-center gap-4'>
-
-			{/* provider */}
 			<VoidCustomDropdownBox
 				options={providerNames}
 				selectedOption={providerName}
@@ -125,27 +119,18 @@ const AddModelMenu = ({ onSubmit }: { onSubmit: () => void }) => {
 				`}
 				arrowTouchesText={false}
 			/>
-			{/* <_VoidSelectBox
-					onCreateInstance={useCallback(() => { providerNameRef.current = providerOptions[0].value }, [providerOptions])} // initialize state
-					onChangeSelection={useCallback((providerName: ProviderName) => { providerNameRef.current = providerName }, [])}
-					options={providerOptions}
-				/> */}
 
-			{/* model */}
 			<div className='max-w-44 w-full border border-void-border-2 bg-void-bg-1 text-void-fg-3 text-root'>
 				<VoidInputBox2
 					placeholder='Model Name'
 					className='mt-[2px] px-[6px] h-full w-full'
-					ref={modelNameRef}
 					multiline={false}
+					onChangeText={setModelName}
 				/>
 			</div>
 
-			{/* button */}
 			<div className='max-w-40'>
 				<VoidButton onClick={() => {
-					const modelName = modelNameRef.current?.value
-
 					if (providerName === null) {
 						setErrorString('Please select a provider.')
 						return
@@ -162,7 +147,6 @@ const AddModelMenu = ({ onSubmit }: { onSubmit: () => void }) => {
 
 					settingsStateService.addModel(providerName, modelName)
 					onSubmit()
-
 				}}
 				>Add model</VoidButton>
 			</div>
@@ -171,9 +155,7 @@ const AddModelMenu = ({ onSubmit }: { onSubmit: () => void }) => {
 				{errorString}
 			</div>}
 		</div>
-
 	</>
-
 }
 
 const AddModelMenuFull = () => {
