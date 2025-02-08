@@ -47,6 +47,8 @@ import { IEnvironmentService } from '../../../../../../../platform/environment/c
 import { IConfigurationService } from '../../../../../../../platform/configuration/common/configuration.js'
 import { IPathService } from '../../../../../../../workbench/services/path/common/pathService.js'
 import { IMetricsService } from '../../../../../../../platform/void/common/metricsService.js'
+import { IWorkspaceContextService } from '../../../../../../../platform/workspace/common/workspace.js';
+import { IEditorService } from '../../../../../../services/editor/common/editorService.js';
 
 
 
@@ -197,6 +199,8 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IQuickEditStateService: accessor.get(IQuickEditStateService),
 		ISidebarStateService: accessor.get(ISidebarStateService),
 		IChatThreadService: accessor.get(IChatThreadService),
+		IWorkspaceContextService: accessor.get(IWorkspaceContextService),
+		IEditorService: accessor.get(IEditorService),
 
 		IInstantiationService: accessor.get(IInstantiationService),
 		ICodeEditorService: accessor.get(ICodeEditorService),

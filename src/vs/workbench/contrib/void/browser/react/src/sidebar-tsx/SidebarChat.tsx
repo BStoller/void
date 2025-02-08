@@ -589,7 +589,7 @@ const ChatBubble = ({ chatMessage, isLoading }: { chatMessage: ChatMessage, isLo
 		`}
 		onMouseEnter={() => setIsHovered(true)}
 		onMouseLeave={() => setIsHovered(false)}
-	>
+>
 		<div
 			// style chatbubble according to role
 			className={`
@@ -622,7 +622,7 @@ const ChatBubble = ({ chatMessage, isLoading }: { chatMessage: ChatMessage, isLo
 
 export const SidebarChat = () => {
 
-	const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
+	const textAreaRef = useRef<HTMLDivElement | null>(null)
 	const textAreaFnsRef = useRef<TextAreaFns | null>(null)
 
 	const accessor = useAccessor()
@@ -674,21 +674,49 @@ export const SidebarChat = () => {
 
 
 	const onSubmit = useCallback(async () => {
+		console.log('SidebarChat - onSubmit called');
 
-		console.log('onSubmit')
+		if (isDisabled) {
+			console.log('SidebarChat - Submit disabled');
+			return;
+		}
+		if (isStreaming) {
+			console.log('SidebarChat - Already streaming');
+			return;
+		}
 
-		if (isDisabled) return
-		if (isStreaming) return
+		// Get the content from the contentEditable div
+		const r = textAreaRef.current;
+		if (!r) {
+			console.log('SidebarChat - No textAreaRef');
+			return;
+		}
 
-		// send message to LLM
-		const userMessage = textAreaRef.current?.value ?? ''
-		await chatThreadsService.addUserMessageAndStreamResponse(userMessage)
+		// Get the message content
+		const message = r.textContent || '';
+		console.log('SidebarChat - Message to send:', message);
 
-		chatThreadsService.setStaging([]) // clear staging
-		textAreaFnsRef.current?.setValue('')
-		textAreaRef.current?.focus() // focus input after submit
+		if (message.trim()) {
+			console.log('SidebarChat - Sending message to chat service');
+			// Send message and wait for response
+			await chatThreadsService.addUserMessageAndStreamResponse(message);
 
-	}, [chatThreadsService, isDisabled, isStreaming, textAreaRef, textAreaFnsRef])
+			console.log('SidebarChat - Clearing input and staging');
+			// Clear the input and staging
+			chatThreadsService.setStaging([]);
+			if (textAreaFnsRef.current) {
+				textAreaFnsRef.current.setValue('');
+			}
+
+			// Focus back on input
+			if (textAreaRef.current) {
+				textAreaRef.current.focus();
+			}
+		} else {
+			console.log('SidebarChat - Empty message, not sending');
+		}
+
+	}, [chatThreadsService, isDisabled, isStreaming]);
 
 	const onAbort = () => {
 		const threadId = currentThread.id
@@ -760,11 +788,16 @@ export const SidebarChat = () => {
 	const onChangeText = useCallback((newStr: string) => {
 		setInstructionsAreEmpty(!newStr)
 	}, [setInstructionsAreEmpty])
-	const onKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+
+	const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+		console.log('SidebarChat - onKeyDown called, key:', e.key, 'shift:', e.shiftKey);
 		if (e.key === 'Enter' && !e.shiftKey) {
-			onSubmit()
+			console.log('SidebarChat - Enter pressed without shift, calling onSubmit');
+			e.preventDefault();
+			onSubmit();
 		}
-	}, [onSubmit])
+	}, [onSubmit]);
+
 	const inputForm = <div className={`right-0 left-0 m-2 z-[999] overflow-hidden ${previousMessages.length > 0 ? 'absolute bottom-0' : ''}`}>
 		<VoidChatArea
 			divRef={chatAreaRef}

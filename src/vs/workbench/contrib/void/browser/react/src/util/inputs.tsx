@@ -9,14 +9,15 @@ import { defaultCheckboxStyles, defaultInputBoxStyles, defaultSelectBoxStyles } 
 import { SelectBox } from '../../../../../../../base/browser/ui/selectBox/selectBox.js';
 import { IDisposable } from '../../../../../../../base/common/lifecycle.js';
 import { Checkbox } from '../../../../../../../base/browser/ui/toggle/toggle.js';
-
 import { CodeEditorWidget } from '../../../../../../../editor/browser/widget/codeEditor/codeEditorWidget.js'
 import { useAccessor } from './services.js';
 import { ITextModel } from '../../../../../../../editor/common/model.js';
 import { asCssVariable } from '../../../../../../../platform/theme/common/colorUtils.js';
 import { inputBackground, inputForeground } from '../../../../../../../platform/theme/common/colorRegistry.js';
 import { useFloating, autoUpdate, offset, flip, shift, size, autoPlacement } from '@floating-ui/react';
-
+import { FilePickerMenu } from './FilePickerMenu.js';
+import { basename } from '../../../../../../../base/common/resources.js';
+import { StagingSelectionItem } from '../../../chatThreadService.js';
 
 // type guard
 const isConstructor = (f: any)
@@ -57,94 +58,298 @@ type InputBox2Props = {
 	fnsRef?: { current: null | TextAreaFns };
 	className?: string;
 	onChangeText?: (value: string) => void;
-	onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+	onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
 	onChangeHeight?: (newHeight: number) => void;
 }
-export const VoidInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Props>(function X({ initValue, placeholder, multiline, fnsRef, className, onKeyDown, onChangeText }, ref) {
-
-	// mirrors whatever is in ref
-	const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
+export const VoidInputBox2 = forwardRef<HTMLDivElement, InputBox2Props>(function X({ initValue, placeholder, multiline, fnsRef, className, onKeyDown, onChangeText }, ref) {
 	const [isEnabled, setEnabled] = useState(true)
+	const [showFileMenu, setShowFileMenu] = useState(false)
+	const [searchText, setSearchText] = useState('')
+	const contentRef = useRef<HTMLDivElement | null>(null)
 
 	const adjustHeight = useCallback(() => {
-		const r = textAreaRef.current
+		const r = contentRef.current
 		if (!r) return
 
-		r.style.height = 'auto' // set to auto to reset height, then set to new height
-
+		r.style.height = 'auto'
 		if (r.scrollHeight === 0) return requestAnimationFrame(adjustHeight)
 		const h = r.scrollHeight
-		const newHeight = Math.min(h + 1, 500) // plus one to avoid scrollbar appearing when it shouldn't
+		const newHeight = Math.min(h + 1, 500)
 		r.style.height = `${newHeight}px`
 	}, []);
 
-
-
 	const fns: TextAreaFns = useMemo(() => ({
 		setValue: (val) => {
-			const r = textAreaRef.current
+			const r = contentRef.current
 			if (!r) return
-			r.value = val
-			onChangeText?.(r.value)
+			r.textContent = val
+			onChangeText?.(r.textContent || '')
 			adjustHeight()
 		},
 		enable: () => { setEnabled(true) },
 		disable: () => { setEnabled(false) },
 	}), [onChangeText, adjustHeight])
 
-
-
 	useEffect(() => {
 		if (initValue)
 			fns.setValue(initValue)
 	}, [initValue])
 
+	const getSerializedContent = (node: HTMLElement): string => {
+		console.log('Serializing content from node:', node);
+		let result = '';
+		node.childNodes.forEach((childNode, index) => {
+			console.log(`Processing node ${index}:`, childNode);
+			if (childNode.nodeType === Node.TEXT_NODE) {
+				console.log('Text node content:', childNode.textContent);
+				result += childNode.textContent || '';
+			} else if (childNode instanceof Element && childNode.classList.contains('file-reference')) {
+				const fileNameSpan = childNode.querySelector('.ml-1');
+				console.log('File reference node:', fileNameSpan?.textContent);
+				result += '@' + (fileNameSpan?.textContent || '');
+			}
+		});
+		console.log('Final serialized content:', result);
+		return result;
+	};
 
+	const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+		console.log('handleKeyDown - Key pressed:', e.key, 'showFileMenu:', showFileMenu, 'shift:', e.shiftKey);
 
+		const r = contentRef.current;
+		if (!r) {
+			console.log('handleKeyDown - No contentRef');
+			return;
+		}
+
+		// If file menu is open, only handle Escape to close it
+		if (showFileMenu) {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				setShowFileMenu(false);
+			}
+			// Let the FilePickerMenu handle all other keys
+			return;
+		}
+
+		const shouldAddNewline = e.shiftKey && multiline;
+		console.log('handleKeyDown - shouldAddNewline:', shouldAddNewline);
+
+		if (e.key === 'Enter' && !shouldAddNewline) {
+			console.log('handleKeyDown - Enter pressed, preventing default');
+			e.preventDefault();
+			e.stopPropagation();
+
+			// Get the content before sending
+			const content = Array.from(r.childNodes).map(node => {
+				if (node.nodeType === Node.TEXT_NODE) {
+					return node.textContent || '';
+				} else if (node instanceof Element && node.classList.contains('file-reference')) {
+					const fileNameSpan = node.querySelector('.ml-1');
+					return '@' + (fileNameSpan?.textContent || '');
+				}
+				return '';
+			}).join('');
+
+			console.log('handleKeyDown - Content to send:', content);
+
+			// Only send if there's actual content
+			if (content.trim()) {
+				onChangeText?.(content);
+			}
+		} else if (e.key === '@') {
+			console.log('@ key pressed, showing file menu');
+			setShowFileMenu(true);
+			setSearchText('');
+		}
+
+		onKeyDown?.(e);
+	}, [onKeyDown, multiline, showFileMenu, onChangeText]);
+
+	const handleChange = useCallback(() => {
+		const r = contentRef.current
+		if (!r) return
+
+		onChangeText?.(getSerializedContent(r))
+		adjustHeight()
+
+		// Handle @ menu search
+		const selection = window.getSelection()
+		if (!selection) return
+
+		const range = selection.getRangeAt(0)
+		const textBeforeCursor = r.textContent?.substring(0, range.startOffset) || ''
+		const lastAtPos = textBeforeCursor.lastIndexOf('@')
+
+		// Only show file picker if we're actively typing after an @ symbol
+		// and there's no file-reference span between the @ and cursor
+		if (lastAtPos !== -1 && lastAtPos < range.startOffset) {
+			const cursorNode = range.startContainer;
+			const nodes = Array.from(r.childNodes);
+			const cursorNodeIndex = nodes.indexOf(cursorNode as ChildNode);
+
+			// Check if we're typing in the same text node as the @ symbol
+			// or if we're in a new text node after a file reference
+			if (cursorNodeIndex !== -1 &&
+				(cursorNode === nodes[0] ||
+				 (cursorNode.nodeType === Node.TEXT_NODE &&
+				  !nodes.slice(0, cursorNodeIndex)
+					  .some(node => node instanceof Element &&
+							node.classList.contains('file-reference'))))) {
+				const searchStr = textBeforeCursor.substring(lastAtPos + 1)
+				setSearchText(searchStr)
+				setShowFileMenu(true)
+				return
+			}
+		}
+
+		setShowFileMenu(false)
+	}, [onChangeText, adjustHeight])
+
+	const accessor = useAccessor();
+	const chatThreadService = accessor.get('IChatThreadService');
+
+	const handleFileSelect = useCallback((selection: StagingSelectionItem) => {
+		console.log('File selected:', selection);
+		const r = contentRef.current
+		if (!r) return
+
+		const sel = window.getSelection()
+		if (!sel) return
+
+		const range = sel.getRangeAt(0)
+		const textBeforeCursor = r.textContent?.substring(0, range.startOffset) || ''
+		const textAfterCursor = r.textContent?.substring(range.startOffset) || ''
+		const lastAtPos = textBeforeCursor.lastIndexOf('@')
+
+		console.log('Text before cursor:', textBeforeCursor);
+		console.log('Text after cursor:', textAfterCursor);
+		console.log('Last @ position:', lastAtPos);
+
+		if (lastAtPos !== -1) {
+			const fileName = basename(selection.fileURI);
+			console.log('Creating file reference for:', fileName);
+
+			// Create the file reference element
+			const fileRefSpan = document.createElement('span');
+			fileRefSpan.className = 'file-reference inline-flex items-center bg-void-bg-2 rounded px-1.5 py-0.5 text-void-fg-1 text-sm';
+
+			const atSpan = document.createElement('span');
+			atSpan.className = 'text-void-fg-3';
+			atSpan.textContent = '@';
+
+			const nameSpan = document.createElement('span');
+			nameSpan.className = 'ml-1';
+			nameSpan.textContent = fileName;
+
+			fileRefSpan.appendChild(atSpan);
+			fileRefSpan.appendChild(nameSpan);
+
+			// Create a new range for the replacement
+			const newRange = document.createRange();
+			newRange.setStart(r.firstChild || r, lastAtPos);
+			newRange.setEnd(range.startContainer, range.startOffset);
+
+			// Delete the @ symbol and any text after it up to cursor
+			newRange.deleteContents();
+
+			// Insert the file reference
+			newRange.insertNode(fileRefSpan);
+
+			// Add a space after the file reference
+			const spaceNode = document.createTextNode(' ');
+			fileRefSpan.after(spaceNode);
+
+			// Add back the text that was after the cursor
+			if (textAfterCursor) {
+				const afterTextNode = document.createTextNode(textAfterCursor);
+				spaceNode.after(afterTextNode);
+			}
+
+			// Set cursor position after the space
+			const selRange = document.createRange();
+			selRange.setStartAfter(spaceNode);
+			selRange.collapse(true);
+			sel.removeAllRanges();
+			sel.addRange(selRange);
+
+			// Trigger content update
+			const content = getSerializedContent(r);
+			console.log('Updated content after file reference:', content);
+			onChangeText?.(content);
+			adjustHeight();
+		}
+
+		// Add the file to staging selections
+		const currentStaging = chatThreadService.state.currentStagingSelections ?? [];
+		chatThreadService.setStaging([...currentStaging, selection]);
+
+		setShowFileMenu(false);
+	}, [onChangeText, adjustHeight, chatThreadService, getSerializedContent]);
+
+	// Add placeholder handling
+	useEffect(() => {
+		const r = contentRef.current
+		if (!r) return
+
+		const updatePlaceholder = () => {
+			if (!r.textContent || r.textContent.trim() === '') {
+				r.classList.add('empty')
+			} else {
+				r.classList.remove('empty')
+			}
+		}
+
+		updatePlaceholder()
+		r.addEventListener('input', updatePlaceholder)
+		return () => r.removeEventListener('input', updatePlaceholder)
+	}, [])
 
 	return (
-		<textarea
-			ref={useCallback((r: HTMLTextAreaElement | null) => {
-				if (fnsRef)
-					fnsRef.current = fns
+		<>
+			<div
+				ref={useCallback((r: HTMLDivElement | null) => {
+					if (fnsRef)
+						fnsRef.current = fns
 
-				textAreaRef.current = r
-				if (typeof ref === 'function') ref(r)
-				else if (ref) ref.current = r
-				adjustHeight()
-			}, [fnsRef, fns, setEnabled, adjustHeight, ref])}
+					contentRef.current = r
+					if (typeof ref === 'function') ref(r)
+					else if (ref) ref.current = r
+					adjustHeight()
+				}, [fnsRef, fns, setEnabled, adjustHeight, ref])}
 
-			disabled={!isEnabled}
+				contentEditable={isEnabled}
+				suppressContentEditableWarning={true}
 
-			className={`w-full resize-none max-h-[500px] overflow-y-auto text-void-fg-1 placeholder:text-void-fg-3 ${className}`}
-			style={{
-				// defaultInputBoxStyles
-				background: asCssVariable(inputBackground),
-				color: asCssVariable(inputForeground)
-				// inputBorder: asCssVariable(inputBorder),
-			}}
+				className={`w-full min-h-[23px] max-h-[500px] overflow-y-auto text-void-fg-1 outline-none whitespace-pre-wrap
+					[&_.file-reference]:inline-flex [&_.file-reference]:items-center [&_.file-reference]:bg-void-bg-2
+					[&_.file-reference]:rounded [&_.file-reference]:px-1.5 [&_.file-reference]:py-0.5
+					[&_.file-reference]:text-void-fg-1 [&_.file-reference]:text-sm
+					empty:before:content-[attr(data-placeholder)] empty:before:text-void-fg-3
+					${className}`}
+				style={{
+					background: asCssVariable(inputBackground),
+					color: asCssVariable(inputForeground)
+				}}
 
-			onChange={useCallback(() => {
-				const r = textAreaRef.current
-				if (!r) return
-				onChangeText?.(r.value)
-				adjustHeight()
-			}, [onChangeText, adjustHeight])}
-
-			onKeyDown={useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-				if (e.key === 'Enter') {
-					// Shift + Enter when multiline = newline
-					const shouldAddNewline = e.shiftKey && multiline
-					if (!shouldAddNewline) e.preventDefault(); // prevent newline from being created
-				}
-				onKeyDown?.(e)
-			}, [onKeyDown, multiline])}
-
-			rows={1}
-			placeholder={placeholder}
-		/>
+				onInput={handleChange}
+				onKeyDown={handleKeyDown}
+				role="textbox"
+				aria-multiline={multiline}
+				data-placeholder={placeholder}
+			/>
+			{showFileMenu && (
+				<FilePickerMenu
+					isOpen={showFileMenu}
+					onClose={() => setShowFileMenu(false)}
+					onSelect={handleFileSelect}
+					anchorEl={contentRef.current}
+					searchText={searchText}
+				/>
+			)}
+		</>
 	)
-
 })
 
 export const VoidInputBox = ({ onChangeText, onCreateInstance, inputBoxRef, placeholder, multiline }: {
@@ -859,6 +1064,27 @@ export const VoidButton = ({ children, disabled, onClick }: { children: React.Re
 // 				checkboxRef.current.dispose();
 // 				if (containerRef.current) {
 // 					while (containerRef.current.firstChild) {
+// 						containerRef.current.removeChild(containerRef.current.firstChild);
+// 					}
+// 				}
+// 				checkboxRef.current = null;
+// 			}
+// 		};
+// 	}, [checkboxRef, label, initVal, onChangeChecked]);
+
+// 	return <div ref={containerRef} className="w-full" />;
+// };
+
+const FileReference = ({ fileName }: { fileName: string }) => {
+	return (
+		<span className="inline-flex items-center bg-void-bg-2 rounded px-1.5 py-0.5 text-void-fg-1 text-sm">
+			<span className="text-void-fg-3">@</span>
+			<span className="ml-1">{fileName}</span>
+		</span>
+	);
+};
+
+
 // 						containerRef.current.removeChild(containerRef.current.firstChild);
 // 					}
 // 				}
